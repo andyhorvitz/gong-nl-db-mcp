@@ -121,7 +121,10 @@ class Db:
         conn = self._connect()
         try:
             conn.autocommit = False
-            with conn.cursor() as cur:
+            # pg8000 cursors don't implement the context-manager protocol, so
+            # we manage lifetime explicitly.
+            cur = conn.cursor()
+            try:
                 # Per-session read-only characteristics (belt + suspenders on
                 # top of the DB-level default_transaction_read_only).
                 cur.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
@@ -158,6 +161,8 @@ class Db:
                     # Always ROLLBACK — we never want to accidentally commit,
                     # even though the transaction is READ ONLY.
                     cur.execute("ROLLBACK")
+            finally:
+                cur.close()
         finally:
             conn.close()
 
