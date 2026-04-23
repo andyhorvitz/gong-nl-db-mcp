@@ -78,9 +78,17 @@ if [[ -f "${CLAUDE_CONFIG}" && ! -f "${CLAUDE_CONFIG}.bak" ]]; then
 fi
 
 # Merge or create using Python (always available on macOS).
+# Explicitly export the shell vars into Python's environment — shell-local
+# variables are not inherited into child processes by default.
 log "Registering MCP server '${SERVER_NAME}' in Claude Desktop config…"
-python3 - <<PY
-import json, os, sys
+CLAUDE_CONFIG="${CLAUDE_CONFIG}" \
+SERVER_NAME="${SERVER_NAME}" \
+PACKAGE="${PACKAGE}" \
+INSTANCE_CONNECTION_NAME="${INSTANCE_CONNECTION_NAME}" \
+DB_NAME="${DB_NAME}" \
+IP_TYPE="${IP_TYPE}" \
+python3 - <<'PY'
+import json, os
 path = os.environ["CLAUDE_CONFIG"]
 server_name = os.environ["SERVER_NAME"]
 package = os.environ["PACKAGE"]
