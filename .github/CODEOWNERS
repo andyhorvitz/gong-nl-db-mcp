@@ -1,0 +1,5 @@
+# Changes to the read-only safety layer must be reviewed by the project owner.
+# This file, combined with a branch-protection rule requiring code-owner
+# review on `main`, is the structural backstop for the read-only guarantee.
+/src/gong_nl_db_mcp/safety.py    @andyhorvitz
+/tests/test_safety.py            @andyhorvitz

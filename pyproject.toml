@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gong-nl-db-mcp"
+version = "0.1.0"
+description = "MCP server giving Claude Desktop read-only access to the BairesDev gong-nl-db Cloud SQL Postgres instance."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Andy Horvitz", email = "andy.horvitz@bairesdev.com" }]
+keywords = ["mcp", "claude", "cloud-sql", "postgres", "gong"]
+classifiers = [
+    "Private :: Do Not Upload",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "mcp>=1.2.0",
+    "cloud-sql-python-connector[pg8000]>=1.11.0",
+    "google-auth>=2.30.0",
+    "sqlglot>=25.0.0",
+    "pydantic>=2.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.5.0",
+]
+
+[project.scripts]
+gong-nl-db-mcp = "gong_nl_db_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/andyhorvitz/gong-nl-db-mcp"
+Issues = "https://github.com/andyhorvitz/gong-nl-db-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gong_nl_db_mcp"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
