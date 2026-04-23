@@ -12,9 +12,9 @@ license = { text = "Proprietary" }
 authors = [{ name = "Andy Horvitz", email = "andy.horvitz@bairesdev.com" }]
 keywords = ["mcp", "claude", "cloud-sql", "postgres", "gong"]
 classifiers = [
-    "Private :: Do Not Upload",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "License :: Other/Proprietary License",
 ]
 dependencies = [
     "mcp>=1.2.0",
