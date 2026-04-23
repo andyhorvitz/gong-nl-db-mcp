@@ -19,8 +19,8 @@ set -euo pipefail
 # These three values must match the production Cloud SQL instance. Update
 # them here when the instance moves; installers will pick up the new values
 # on their next re-run.
-INSTANCE_CONNECTION_NAME="${INSTANCE_CONNECTION_NAME:-REPLACE_ME:region:gong-nl-db}"
-DB_NAME="${DB_NAME:-REPLACE_ME}"
+INSTANCE_CONNECTION_NAME="${INSTANCE_CONNECTION_NAME:-planar-ray-494004-b8:us-central1:gong-nl-db}"
+DB_NAME="${DB_NAME:-gong}"
 IP_TYPE="${IP_TYPE:-PUBLIC}"
 
 PACKAGE="gong-nl-db-mcp"
