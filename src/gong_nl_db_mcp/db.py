@@ -183,38 +183,67 @@ def _resolve_iam_user() -> str:
     For user credentials this is the email address (e.g.
     ``alice@bairesdev.com``). For service accounts, Cloud SQL expects the
     principal's email MINUS the ``.gserviceaccount.com`` suffix.
+
+    Resolution order:
+      1. ``IAM_DB_USER`` env var (explicit override — always wins).
+      2. Service-account email on the google-auth credentials (SA ADC).
+      3. ``creds.account`` / ``creds.signer_email`` (rare — not set on the
+         user-account ADC flow that colleagues use).
+      4. ``gcloud config get-value account`` — the reliable source for user
+         ADC, since google-auth does not expose the email on user creds.
     """
-    creds, _project = google_auth_default(
-        scopes=["https://www.googleapis.com/auth/sqlservice.admin"]
-    )
-
-    # User credentials expose the account via .id_token or the quota_project
-    # plus a .service_account_email for SA creds. Most reliable: the credentials
-    # subject on refresh. But we can avoid a refresh by inspecting attributes.
-    email = getattr(creds, "service_account_email", None) or getattr(
-        creds, "_service_account_email", None
-    )
-    if email:
-        # Service account: strip .gserviceaccount.com per Cloud SQL IAM docs.
-        if email.endswith(".gserviceaccount.com"):
-            email = email[: -len(".gserviceaccount.com")]
-        return email
-
-    # User ADC: the gcloud CLI writes the active account to
-    # application_default_credentials.json; google-auth exposes it via
-    # .quota_project_id? No — use the IAM Credentials API via an ID-token call
-    # or just honor an explicit override. We ship an override env var for the
-    # rare case where introspection fails.
+    # 1. Explicit override — always wins, useful for tests and SA overrides.
     override = os.environ.get("IAM_DB_USER", "").strip()
     if override:
         return override
 
-    # Fall back to refreshing the creds and reading .signer_email / .account.
-    account = getattr(creds, "account", None) or getattr(creds, "signer_email", None)
-    if account:
-        return account
+    # 2/3. google-auth inspection.
+    creds = None
+    try:
+        creds, _project = google_auth_default(
+            scopes=["https://www.googleapis.com/auth/sqlservice.admin"]
+        )
+    except Exception as e:
+        log.warning("google-auth default() failed: %s", e)
+
+    if creds is not None:
+        sa_email = getattr(creds, "service_account_email", None) or getattr(
+            creds, "_service_account_email", None
+        )
+        if sa_email:
+            if sa_email.endswith(".gserviceaccount.com"):
+                sa_email = sa_email[: -len(".gserviceaccount.com")]
+            return sa_email
+
+        account = getattr(creds, "account", None) or getattr(
+            creds, "signer_email", None
+        )
+        if account:
+            return account
+
+    # 4. Fall back to gcloud. This is the path the vast majority of colleagues
+    # will hit, since user ADC creds don't carry the email.
+    from shutil import which
+    import subprocess
+
+    gcloud = which("gcloud")
+    if gcloud:
+        try:
+            out = subprocess.run(
+                [gcloud, "config", "get-value", "account"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            email = (out.stdout or "").strip()
+            if email and "@" in email and "unset" not in email.lower():
+                return email
+        except Exception as e:  # pragma: no cover — best-effort
+            log.warning("gcloud config get-value account failed: %s", e)
 
     raise RuntimeError(
-        "Could not determine IAM DB username from ADC. "
-        "Set IAM_DB_USER to your Google account email (e.g. alice@bairesdev.com)."
+        "Could not determine IAM DB username. "
+        "Run `gcloud auth application-default login` with your @bairesdev.com "
+        "account, or set IAM_DB_USER to your Google account email."
     )
