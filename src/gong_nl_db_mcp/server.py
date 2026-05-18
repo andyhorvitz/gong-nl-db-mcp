@@ -127,6 +127,99 @@ def build_server() -> FastMCP:
 
         return _execute(db(), final_sql, max_rows=capped)
 
+    # ------------------------------------------------------------------ #
+    # Domain helper tools (structured shortcuts for common questions).
+    # Prefer these over hand-writing SQL — they route through the same
+    # read-only execution path but hit purpose-built indexes / views.
+    # ------------------------------------------------------------------ #
+
+    @mcp.tool(
+        description=(
+            "Full-text search across transcript_segments. Prefer this over "
+            "ILIKE when searching for phrases in calls — it uses the GIN "
+            "FTS index and is ~100x faster. Returns matching segments "
+            "joined to call metadata. `query` supports websearch syntax: "
+            "\"pricing objection\", pricing OR discount, -competitor. "
+            "`since` / `until` are ISO-8601 dates or timestamps (optional). "
+            "`host_email` filters to calls owned by one user (optional)."
+        )
+    )
+    def search_transcripts(
+        query: str,
+        since: str | None = None,
+        until: str | None = None,
+        host_email: str | None = None,
+        limit: int = 20,
+    ) -> str:
+        capped = max(1, min(limit, 100))
+        where = [
+            "to_tsvector('english', coalesce(ts.text, '')) "
+            f"@@ websearch_to_tsquery('english', {_lit(query)})"
+        ]
+        if since:
+            where.append(f"c.started >= {_lit(since)}::timestamptz")
+        if until:
+            where.append(f"c.started <  {_lit(until)}::timestamptz")
+        if host_email:
+            where.append(f"u.email = {_lit(host_email)}")
+        sql = f"""
+            SELECT c.id            AS call_id,
+                   c.title,
+                   c.started,
+                   u.email         AS host_email,
+                   c.company_name,
+                   ts.speaker_id,
+                   ts.start_time,
+                   ts.end_time,
+                   left(ts.text, 300) AS snippet
+            FROM transcript_segments ts
+            JOIN calls c ON c.id = ts.call_id
+            LEFT JOIN users u ON u.id = c.primary_user_id
+            WHERE {' AND '.join(where)}
+            ORDER BY c.started DESC
+            LIMIT {capped}
+        """
+        return _execute(db(), sql, max_rows=capped)
+
+    @mcp.tool(
+        description=(
+            "Per-user daily call activity from the mv_user_daily materialized "
+            "view — answers questions like 'how many calls did X have this "
+            "week', 'avg talk ratio by person last month'. Filter by "
+            "`host_email` (single user) or leave blank for team view. "
+            "`since`/`until` are ISO-8601 dates (inclusive / exclusive). "
+            "Returns one row per (host, date)."
+        )
+    )
+    def user_activity(
+        host_email: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 200,
+    ) -> str:
+        capped = max(1, min(limit, 1000))
+        where: list[str] = []
+        if host_email:
+            where.append(f"host_email = {_lit(host_email)}")
+        if since:
+            where.append(f"started_date >= {_lit(since)}::date")
+        if until:
+            where.append(f"started_date <  {_lit(until)}::date")
+        where_clause = ("WHERE " + " AND ".join(where)) if where else ""
+        sql = f"""
+            SELECT host_email,
+                   started_date,
+                   calls,
+                   total_sec,
+                   round(avg_talk_ratio::numeric, 3) AS avg_talk_ratio,
+                   questions_asked
+            FROM mv_user_daily
+            {where_clause}
+            ORDER BY started_date DESC, calls DESC
+            LIMIT {capped}
+        """
+        return _execute(db(), sql, max_rows=capped)
+
     @mcp.tool(
         description=(
             "Return the Postgres query plan for a SELECT statement. "
@@ -185,6 +278,16 @@ def _ident(name: str) -> str:
 
 
 def main() -> None:
+    # cloud-sql-python-connector uses aiohttp for its calls to
+    # sqladmin.googleapis.com. On some Python builds the default SSL context
+    # doesn't locate the system CA bundle, producing a
+    # CERTIFICATE_VERIFY_FAILED error before any query runs. Anchoring to
+    # certifi's bundle (already a transitive dep) fixes this reliably across
+    # macOS and colleagues' machines without overriding an admin-set cert file.
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",

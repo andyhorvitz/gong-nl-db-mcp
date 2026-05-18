@@ -22,6 +22,7 @@ dependencies = [
     "google-auth>=2.30.0",
     "sqlglot>=25.0.0",
     "pydantic>=2.7.0",
+    "certifi>=2024.0.0",
 ]
 
 [project.optional-dependencies]
