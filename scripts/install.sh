@@ -7,7 +7,8 @@
 # What this does:
 #   1. Confirms we're on macOS.
 #   2. Ensures `uv` is installed (installs via astral.sh if missing).
-#   3. Ensures `gcloud` is installed and ADC is set up.
+#   3. Ensures `gcloud` is installed (auto-installs via sdk.cloud.google.com
+#      if missing) and ADC is set up.
 #   4. Writes an MCP server entry into Claude Desktop's config.
 #   5. Tells the colleague to restart Claude Desktop.
 #
@@ -53,10 +54,25 @@ fi
 # ----- 3. gcloud + ADC ----------------------------------------------------
 
 if ! command -v gcloud >/dev/null 2>&1; then
-    warn "gcloud is not installed."
-    echo "Install it with:   brew install --cask google-cloud-sdk"
-    echo "Or download:       https://cloud.google.com/sdk/docs/install-sdk"
-    die "Install gcloud, then re-run this script."
+    # Try the standard install location in case it's installed but not on PATH
+    # in the current shell (Google's installer adds it to ~/.bashrc/.zshrc but
+    # those aren't sourced by a non-interactive pipe-to-bash invocation).
+    if [[ -x "${HOME}/google-cloud-sdk/bin/gcloud" ]]; then
+        export PATH="${HOME}/google-cloud-sdk/bin:${PATH}"
+        log "Found existing gcloud at ~/google-cloud-sdk (added to PATH for this session)."
+    else
+        log "gcloud not found — installing Google Cloud SDK to ~/google-cloud-sdk…"
+        log "(This is the official Google installer. ~500MB, ~30 seconds.)"
+        # --disable-prompts: non-interactive (uses defaults, modifies shell rc).
+        # --install-dir: where to install (defaults to $HOME).
+        # Pipe an empty string to stdin so any residual prompt reads as EOF.
+        curl -sSL https://sdk.cloud.google.com > /tmp/gcloud-install-$$.sh
+        bash /tmp/gcloud-install-$$.sh --disable-prompts --install-dir="${HOME}" </dev/null
+        rm -f /tmp/gcloud-install-$$.sh
+        export PATH="${HOME}/google-cloud-sdk/bin:${PATH}"
+        command -v gcloud >/dev/null 2>&1 || die "gcloud install appeared to succeed but 'gcloud' is not on PATH."
+        log "gcloud installed. (Open a new terminal later to use 'gcloud' outside this script.)"
+    fi
 fi
 
 if ! gcloud auth application-default print-access-token >/dev/null 2>&1; then
