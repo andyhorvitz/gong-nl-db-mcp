@@ -277,16 +277,41 @@ def _ident(name: str) -> str:
 # ---------------------------------------------------------------------- #
 
 
-def main() -> None:
-    # cloud-sql-python-connector uses aiohttp for its calls to
-    # sqladmin.googleapis.com. On some Python builds the default SSL context
-    # doesn't locate the system CA bundle, producing a
-    # CERTIFICATE_VERIFY_FAILED error before any query runs. Anchoring to
-    # certifi's bundle (already a transitive dep) fixes this reliably across
-    # macOS and colleagues' machines without overriding an admin-set cert file.
+def _patch_ssl_with_certifi() -> None:
+    """Anchor all SSL certificate verification to certifi's CA bundle.
+
+    Two-layer approach:
+    1. Env vars — respected by requests, httpx, and most aiohttp configurations.
+    2. ssl.create_default_context patch — catches libraries that call it
+       directly without checking env vars (e.g. aiohttp on Python 3.13+
+       where the macOS system-keychain path changed).
+
+    Uses setdefault / only patches when no CA is already specified so an
+    admin-configured cert file always takes precedence.
+    """
     import certifi
-    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
-    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+    import ssl
+
+    bundle = certifi.where()
+    os.environ.setdefault("SSL_CERT_FILE", bundle)
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", bundle)
+
+    _orig = ssl.create_default_context
+
+    def _patched_ctx(*args, cafile=None, capath=None, cadata=None, **kwargs):
+        if cafile is None and capath is None and cadata is None:
+            cafile = bundle
+        return _orig(*args, cafile=cafile, capath=capath, cadata=cadata, **kwargs)
+
+    ssl.create_default_context = _patched_ctx  # type: ignore[assignment]
+
+
+def main() -> None:
+    # Must run before any network I/O — cloud-sql-python-connector's aiohttp
+    # calls sqladmin.googleapis.com at connector init time, and the isolated
+    # uvx Python environment does not reliably find the system CA bundle on
+    # macOS (affects Python 3.12+ / 3.13+ depending on the build).
+    _patch_ssl_with_certifi()
 
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),

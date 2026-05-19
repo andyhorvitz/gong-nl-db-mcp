@@ -38,6 +38,41 @@ The installer will:
 If you get a permissions error, ping Andy — he needs to grant your Google
 account access to the Cloud SQL instance (see the owner setup section below).
 
+### Troubleshooting
+
+**`CERTIFICATE_VERIFY_FAILED` / SSL errors in Claude Desktop's logs**
+
+This is the most common failure. The installer pins the server to Python 3.12
+(`--python 3.12` in the Claude Desktop config), which avoids the issue entirely
+on a fresh install. If you hit it anyway (e.g. you installed before this fix):
+
+```sh
+# 1. Clear the cached old package
+uv cache clean gong-nl-db-mcp
+
+# 2. Re-run the installer to update your Claude Desktop config
+curl -LsSf https://raw.githubusercontent.com/andyhorvitz/gong-nl-db-mcp/main/scripts/install.sh | bash
+
+# 3. Fully quit and reopen Claude Desktop (⌘Q, not just close the window)
+```
+
+**"Could not determine IAM DB username"**
+
+You either aren't logged in or logged in with the wrong account. Run:
+
+```sh
+gcloud auth application-default login
+# Use your @bairesdev.com account when the browser opens.
+```
+
+Then restart Claude Desktop.
+
+**MCP server not appearing in Claude Desktop**
+
+Check `~/Library/Logs/Claude/` for stderr from the server. Also verify the
+entry exists in `~/Library/Application Support/Claude/claude_desktop_config.json`
+under `mcpServers.gong-nl-db`.
+
 ### What you can do
 
 Claude will have these tools available under the `gong-nl-db` MCP server:

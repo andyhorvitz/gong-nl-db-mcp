@@ -9,8 +9,11 @@
 #   2. Ensures `uv` is installed (installs via astral.sh if missing).
 #   3. Ensures `gcloud` is installed (auto-installs via sdk.cloud.google.com
 #      if missing) and ADC is set up.
-#   4. Writes an MCP server entry into Claude Desktop's config.
-#   5. Tells the colleague to restart Claude Desktop.
+#   4. Clears any cached old version of the package so the next run is fresh.
+#   5. Writes an MCP server entry into Claude Desktop's config (pinned to
+#      Python 3.12 for SSL compatibility).
+#   6. Runs a smoke test to confirm the package imports cleanly.
+#   7. Tells the colleague to restart Claude Desktop.
 #
 # Re-running is safe: the script is idempotent.
 
@@ -25,6 +28,10 @@ DB_NAME="${DB_NAME:-gong}"
 IP_TYPE="${IP_TYPE:-PUBLIC}"
 
 PACKAGE="gong-nl-db-mcp"
+# Pin to Python 3.12. The package is tested on 3.12 in CI and cloud-sql-
+# python-connector has SSL behaviour differences on 3.13+ (and outright
+# breakage on 3.14) in uvx's isolated environment.
+PYTHON_VERSION="3.12"
 SERVER_NAME="gong-nl-db"
 CLAUDE_CONFIG_DIR="${HOME}/Library/Application Support/Claude"
 CLAUDE_CONFIG="${CLAUDE_CONFIG_DIR}/claude_desktop_config.json"
@@ -32,6 +39,7 @@ CLAUDE_CONFIG="${CLAUDE_CONFIG_DIR}/claude_desktop_config.json"
 # ----- Helpers ------------------------------------------------------------
 
 log()  { printf "\033[1;34m==>\033[0m %s\n" "$*"; }
+ok()   { printf "\033[1;32m✓\033[0m  %s\n" "$*"; }
 warn() { printf "\033[1;33m!!\033[0m  %s\n" "$*" >&2; }
 die()  { printf "\033[1;31m✗\033[0m  %s\n" "$*" >&2; exit 1; }
 
@@ -83,7 +91,13 @@ else
     log "gcloud ADC already set up."
 fi
 
-# ----- 4. Write Claude Desktop config ------------------------------------
+# ----- 4. Clear cached package (ensures the latest version is used) -------
+
+log "Clearing any cached version of ${PACKAGE}…"
+uv cache clean "${PACKAGE}" 2>/dev/null || true
+ok "Cache cleared."
+
+# ----- 5. Write Claude Desktop config ------------------------------------
 
 mkdir -p "${CLAUDE_CONFIG_DIR}"
 
@@ -100,6 +114,7 @@ log "Registering MCP server '${SERVER_NAME}' in Claude Desktop config…"
 CLAUDE_CONFIG="${CLAUDE_CONFIG}" \
 SERVER_NAME="${SERVER_NAME}" \
 PACKAGE="${PACKAGE}" \
+PYTHON_VERSION="${PYTHON_VERSION}" \
 INSTANCE_CONNECTION_NAME="${INSTANCE_CONNECTION_NAME}" \
 DB_NAME="${DB_NAME}" \
 IP_TYPE="${IP_TYPE}" \
@@ -108,9 +123,13 @@ import json, os
 path = os.environ["CLAUDE_CONFIG"]
 server_name = os.environ["SERVER_NAME"]
 package = os.environ["PACKAGE"]
+python_version = os.environ["PYTHON_VERSION"]
 entry = {
     "command": "uvx",
-    "args": [f"{package}@latest"],
+    # --python pins the interpreter; @latest selects the newest published release.
+    # Pinning to 3.12 avoids SSL compatibility issues in Python 3.13/3.14's
+    # isolated uvx environment on macOS (cloud-sql-python-connector / aiohttp).
+    "args": ["--python", python_version, f"{package}@latest"],
     "env": {
         "INSTANCE_CONNECTION_NAME": os.environ["INSTANCE_CONNECTION_NAME"],
         "DB_NAME": os.environ["DB_NAME"],
@@ -129,12 +148,25 @@ with open(path, "w") as f:
 print(f"Wrote {path}")
 PY
 
-# ----- 5. Verify placeholders -------------------------------------------
+# ----- 6. Verify placeholders -------------------------------------------
 
 if [[ "${INSTANCE_CONNECTION_NAME}" == *REPLACE_ME* || "${DB_NAME}" == "REPLACE_ME" ]]; then
     warn "This installer still has REPLACE_ME placeholders for GCP settings."
     warn "Ask the tool owner for the correct INSTANCE_CONNECTION_NAME and DB_NAME,"
     warn "then edit ${CLAUDE_CONFIG} and restart Claude Desktop."
+    exit 0
+fi
+
+# ----- 7. Smoke test — confirm the package imports cleanly ---------------
+
+log "Running smoke test (downloading package if needed, ~10 seconds first time)…"
+if uvx --python "${PYTHON_VERSION}" "${PACKAGE}@latest" --help >/dev/null 2>&1; then
+    ok "Smoke test passed — package installed and starts cleanly on Python ${PYTHON_VERSION}."
+else
+    # Non-fatal: the server may still work; Claude Desktop's stderr logs will
+    # have the real error. Warn rather than die so the config is still written.
+    warn "Smoke test failed. Check ~/Library/Logs/Claude/ after restarting Claude Desktop."
+    warn "Common fix: run  uv cache clean ${PACKAGE}  then re-run this installer."
 fi
 
 log "Done. Restart Claude Desktop to pick up the new MCP server."

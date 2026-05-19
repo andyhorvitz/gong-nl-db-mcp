@@ -4,16 +4,17 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gong-nl-db-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "MCP server giving Claude Desktop read-only access to the BairesDev gong-nl-db Cloud SQL Postgres instance."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 license = { text = "Proprietary" }
 authors = [{ name = "Andy Horvitz", email = "andy.horvitz@bairesdev.com" }]
 keywords = ["mcp", "claude", "cloud-sql", "postgres", "gong"]
 classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: Other/Proprietary License",
 ]
 dependencies = [
