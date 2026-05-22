@@ -117,7 +117,18 @@ log "Using uvx at: ${UVX_PATH}"
 # ----- 6. Clear cached package (ensures the latest version is used) -------
 
 log "Clearing any cached version of ${PACKAGE}…"
-uv cache clean "${PACKAGE}" 2>/dev/null || true
+# Run with a timeout so a slow cache eviction never blocks the install.
+# Errors are non-fatal — worst case the user runs the old cached version
+# once and uvx auto-updates on the next Claude Desktop restart.
+uv cache clean "${PACKAGE}" 2>/dev/null &
+UV_CACHE_PID=$!
+# Give it 10 seconds; kill if still running.
+for i in $(seq 1 10); do
+    kill -0 "${UV_CACHE_PID}" 2>/dev/null || break
+    sleep 1
+done
+kill "${UV_CACHE_PID}" 2>/dev/null || true
+wait "${UV_CACHE_PID}" 2>/dev/null || true
 ok "Cache cleared."
 
 # ----- 5. Write Claude Desktop config ------------------------------------
