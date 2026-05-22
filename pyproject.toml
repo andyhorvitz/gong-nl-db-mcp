@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gong-nl-db-mcp"
-version = "0.1.2"
+version = "0.1.3"
 description = "MCP server giving Claude Desktop read-only access to the BairesDev gong-nl-db Cloud SQL Postgres instance."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"

@@ -91,7 +91,30 @@ else
     log "gcloud ADC already set up."
 fi
 
-# ----- 4. Clear cached package (ensures the latest version is used) -------
+# ----- 4. Resolve the full path to uvx -----------------------------------
+# Claude Desktop launches with a restricted PATH (/usr/local/bin,
+# /opt/homebrew/bin, /usr/bin, /bin, /usr/sbin, /sbin). If uv was installed
+# via the astral.sh script it lands in ~/.local/bin, which is NOT in that
+# list — causing "Failed to spawn process: No such file or directory" even
+# though uvx works fine in the terminal.
+# Fix: write the absolute path to uvx into the Claude Desktop config, and
+# ensure it's also symlinked into /usr/local/bin for good measure.
+
+UVX_PATH="$(command -v uvx)"
+[[ -n "${UVX_PATH}" ]] || die "uvx not found on PATH — this should not happen after the install step above."
+
+# Symlink into /usr/local/bin if it isn't already reachable there.
+if [[ ! -x "/usr/local/bin/uvx" ]]; then
+    log "Symlinking uvx → /usr/local/bin/uvx so Claude Desktop can find it…"
+    sudo ln -sf "${UVX_PATH}" /usr/local/bin/uvx \
+        && ok "Symlinked ${UVX_PATH} → /usr/local/bin/uvx" \
+        || warn "Could not create symlink (sudo failed). Will use full path in config instead."
+fi
+
+# Always use the absolute path in the config regardless — belt and suspenders.
+log "Using uvx at: ${UVX_PATH}"
+
+# ----- 6. Clear cached package (ensures the latest version is used) -------
 
 log "Clearing any cached version of ${PACKAGE}…"
 uv cache clean "${PACKAGE}" 2>/dev/null || true
@@ -115,6 +138,7 @@ CLAUDE_CONFIG="${CLAUDE_CONFIG}" \
 SERVER_NAME="${SERVER_NAME}" \
 PACKAGE="${PACKAGE}" \
 PYTHON_VERSION="${PYTHON_VERSION}" \
+UVX_PATH="${UVX_PATH}" \
 INSTANCE_CONNECTION_NAME="${INSTANCE_CONNECTION_NAME}" \
 DB_NAME="${DB_NAME}" \
 IP_TYPE="${IP_TYPE}" \
@@ -124,8 +148,11 @@ path = os.environ["CLAUDE_CONFIG"]
 server_name = os.environ["SERVER_NAME"]
 package = os.environ["PACKAGE"]
 python_version = os.environ["PYTHON_VERSION"]
+uvx_path = os.environ["UVX_PATH"]
 entry = {
-    "command": "uvx",
+    # Use the absolute path to uvx. Claude Desktop launches with a stripped
+    # PATH that typically excludes ~/.local/bin where uv installs its tools.
+    "command": uvx_path,
     # --python pins the interpreter; @latest selects the newest published release.
     # Pinning to 3.12 avoids SSL compatibility issues in Python 3.13/3.14's
     # isolated uvx environment on macOS (cloud-sql-python-connector / aiohttp).
@@ -148,7 +175,7 @@ with open(path, "w") as f:
 print(f"Wrote {path}")
 PY
 
-# ----- 6. Verify placeholders -------------------------------------------
+# ----- 7. Verify placeholders -------------------------------------------
 
 if [[ "${INSTANCE_CONNECTION_NAME}" == *REPLACE_ME* || "${DB_NAME}" == "REPLACE_ME" ]]; then
     warn "This installer still has REPLACE_ME placeholders for GCP settings."
@@ -157,10 +184,10 @@ if [[ "${INSTANCE_CONNECTION_NAME}" == *REPLACE_ME* || "${DB_NAME}" == "REPLACE_
     exit 0
 fi
 
-# ----- 7. Smoke test — confirm the package imports cleanly ---------------
+# ----- 8. Smoke test — confirm the package imports cleanly ---------------
 
 log "Running smoke test (downloading package if needed, ~10 seconds first time)…"
-if uvx --python "${PYTHON_VERSION}" "${PACKAGE}@latest" --help >/dev/null 2>&1; then
+if "${UVX_PATH}" --python "${PYTHON_VERSION}" "${PACKAGE}@latest" --help >/dev/null 2>&1; then
     ok "Smoke test passed — package installed and starts cleanly on Python ${PYTHON_VERSION}."
 else
     # Non-fatal: the server may still work; Claude Desktop's stderr logs will

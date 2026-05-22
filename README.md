@@ -67,6 +67,20 @@ gcloud auth application-default login
 
 Then restart Claude Desktop.
 
+**`Failed to spawn process: No such file or directory`**
+
+Claude Desktop launches with a stripped PATH that excludes `~/.local/bin`
+(where `uv` installs its tools by default). Fix: symlink `uvx` into a
+directory Claude Desktop can see, then re-run the installer:
+
+```sh
+sudo ln -sf "$(which uvx)" /usr/local/bin/uvx
+curl -LsSf https://raw.githubusercontent.com/andyhorvitz/gong-nl-db-mcp/main/scripts/install.sh | bash
+```
+
+The installer now writes the **absolute path** to `uvx` into the config
+automatically, so a fresh install won't hit this.
+
 **MCP server not appearing in Claude Desktop**
 
 Check `~/Library/Logs/Claude/` for stderr from the server. Also verify the
