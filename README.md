@@ -14,24 +14,33 @@ database directly — always read-only, always audited to their personal
 ## For colleagues (one-time setup, ~3 minutes)
 
 You need:
-- macOS
 - Claude Desktop ([download](https://claude.ai/download))
-- A Google Cloud SDK install — if you don't have `gcloud`:
-  ```sh
-  brew install --cask google-cloud-sdk
-  ```
 
-Then run:
+That's it — the installer handles everything else.
+
+### macOS
+
+Open **Terminal** and paste:
 
 ```sh
 curl -LsSf https://raw.githubusercontent.com/andyhorvitz/gong-nl-db-mcp/main/scripts/install.sh | bash
 ```
 
-The installer will:
+### Windows
+
+Open **PowerShell** (search "PowerShell" in the Start menu) and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/andyhorvitz/gong-nl-db-mcp/main/scripts/install.ps1 | iex
+```
+
+---
+
+Both installers will:
 1. Install `uv` (tiny Python runner) if you don't have it.
-2. Prompt you to sign in to Google with `gcloud auth application-default login`.
-   Use your `@bairesdev.com` account.
-3. Register the `gong-nl-db` MCP server in Claude Desktop's config.
+2. Install Google Cloud SDK if you don't have it.
+3. Prompt you to sign in to Google — use your `@bairesdev.com` account.
+4. Register the `gong-nl-db` MCP server in Claude Desktop's config.
 
 **Restart Claude Desktop** and try asking it: *"List the schemas in gong-nl-db."*
 
@@ -83,9 +92,18 @@ automatically, so a fresh install won't hit this.
 
 **MCP server not appearing in Claude Desktop**
 
-Check `~/Library/Logs/Claude/` for stderr from the server. Also verify the
-entry exists in `~/Library/Application Support/Claude/claude_desktop_config.json`
-under `mcpServers.gong-nl-db`.
+- **macOS:** Check `~/Library/Logs/Claude/` for errors. Verify the entry exists in
+  `~/Library/Application Support/Claude/claude_desktop_config.json` under `mcpServers.gong-nl-db`.
+- **Windows:** Check `%APPDATA%\Claude\logs\` for errors. Verify the entry exists in
+  `%APPDATA%\Claude\claude_desktop_config.json` under `mcpServers.gong-nl-db`.
+
+**Windows: PowerShell says "running scripts is disabled"**
+
+Run this once in PowerShell as Administrator, then retry the installer:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
 
 ### What you can do
 
