@@ -91,6 +91,14 @@ else
     log "gcloud ADC already set up."
 fi
 
+# Set the quota project so ADC requests are billed/attributed to the correct
+# GCP project. Without this, gcloud auth application-default set-quota-project
+# will fail with a serviceusage.services.use permissions error on first use.
+log "Setting ADC quota project…"
+gcloud auth application-default set-quota-project "${INSTANCE_CONNECTION_NAME%%:*}" 2>/dev/null \
+    && ok "Quota project set." \
+    || warn "Could not set quota project — you may need to run this manually after install: gcloud auth application-default set-quota-project planar-ray-494004-b8"
+
 # ----- 4. Resolve the full path to uvx -----------------------------------
 # Claude Desktop launches with a restricted PATH (/usr/local/bin,
 # /opt/homebrew/bin, /usr/bin, /bin, /usr/sbin, /sbin). If uv was installed

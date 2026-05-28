@@ -65,16 +65,34 @@ curl -LsSf https://raw.githubusercontent.com/andyhorvitz/gong-nl-db-mcp/main/scr
 # 3. Fully quit and reopen Claude Desktop (⌘Q, not just close the window)
 ```
 
+**`serviceusage.services.use` permission error / `list_schemas` hangs**
+
+The ADC quota project isn't set. Run:
+
+```sh
+# macOS
+gcloud auth application-default set-quota-project planar-ray-494004-b8
+
+# Windows (PowerShell)
+gcloud auth application-default set-quota-project planar-ray-494004-b8
+```
+
+Then restart Claude Desktop. The installer now does this automatically, so
+a fresh install won't hit this.
+
 **"Could not determine IAM DB username"**
 
 You either aren't logged in or logged in with the wrong account. Run:
 
 ```sh
+# macOS
 gcloud auth application-default login
-# Use your @bairesdev.com account when the browser opens.
+
+# Windows (PowerShell)
+gcloud auth application-default login
 ```
 
-Then restart Claude Desktop.
+Use your @bairesdev.com account when the browser opens, then restart Claude Desktop.
 
 **`Failed to spawn process: No such file or directory`**
 

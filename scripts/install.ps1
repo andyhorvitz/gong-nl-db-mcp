@@ -148,6 +148,23 @@ if (-not $adcOk) {
     Log "gcloud ADC already set up."
 }
 
+# Set the quota project so ADC requests are billed/attributed to the correct
+# GCP project. Without this, gcloud auth application-default set-quota-project
+# will fail with a serviceusage.services.use permissions error on first use.
+Log "Setting ADC quota project..."
+$project = $INSTANCE_CONNECTION_NAME.Split(":")[0]
+try {
+    & $gcloudExe auth application-default set-quota-project $project 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Ok "Quota project set."
+    } else {
+        Warn "Could not set quota project automatically."
+        Warn "Run this manually after install: gcloud auth application-default set-quota-project $project"
+    }
+} catch {
+    Warn "Could not set quota project: $_"
+}
+
 # ----- 4. Clear cached package --------------------------------------------
 
 Log "Clearing any cached version of ${PACKAGE}..."
