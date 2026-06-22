@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
@@ -146,9 +147,9 @@ def build_server() -> FastMCP:
     )
     def search_transcripts(
         query: str,
-        since: str | None = None,
-        until: str | None = None,
-        host_email: str | None = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        host_email: Optional[str] = None,
         limit: int = 20,
     ) -> str:
         capped = max(1, min(limit, 100))
@@ -192,9 +193,9 @@ def build_server() -> FastMCP:
         )
     )
     def user_activity(
-        host_email: str | None = None,
-        since: str | None = None,
-        until: str | None = None,
+        host_email: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
         limit: int = 200,
     ) -> str:
         capped = max(1, min(limit, 1000))
