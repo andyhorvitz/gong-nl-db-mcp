@@ -135,6 +135,9 @@ Claude will have these tools available under the `gong-nl-db` MCP server:
 | `sample_rows(table, schema, limit)` | Return up to 50 sample rows |
 | `run_query(sql, limit)` | Run a read-only SELECT / WITH / set-op (max 1000 rows) |
 | `explain_query(sql)` | Return the query plan |
+| `search_transcripts(query, ...)` | Full-text keyword search across transcript segments (FTS/GIN index) |
+| `user_activity(host_email, ...)` | Per-rep daily call stats from the `mv_user_daily` materialized view |
+| `semantic_search(query, ...)` | Meaning-based search using Vertex AI embeddings — finds conceptually related transcript chunks even without exact word matches |
 
 ### What you *can't* do
 

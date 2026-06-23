@@ -6,9 +6,12 @@ Claude Desktop via stdio.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
+import urllib.error
+import urllib.request
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -223,6 +226,78 @@ def build_server() -> FastMCP:
 
     @mcp.tool(
         description=(
+            "Semantic / meaning-based search across call transcript chunks using "
+            "Vertex AI embeddings (text-embedding-005) and cosine similarity. "
+            "Use this when the user asks to find calls 'about' a topic or concept "
+            "— e.g. 'calls where pricing came up', 'conversations about churn "
+            "risk', 'mentions of competitor X'. Unlike search_transcripts (FTS "
+            "keyword matching), this finds conceptually related content even "
+            "without exact word matches. "
+            "`since`/`until` are ISO-8601 dates (optional). "
+            "`host_email` filters to one rep's calls (optional). "
+            "`limit` caps results 1–20 (default 10)."
+        )
+    )
+    def semantic_search(
+        query: str,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        host_email: Optional[str] = None,
+        limit: int = 10,
+    ) -> str:
+        capped = max(1, min(limit, 20))
+
+        # Derive GCP project from the instance connection name (project:region:instance).
+        icn = os.environ.get("INSTANCE_CONNECTION_NAME", "planar-ray-494004-b8:us-central1:gong-nl-db")
+        project = icn.split(":")[0]
+
+        try:
+            vec = _embed_query(query, project)
+        except Exception as e:
+            return f"❌ Could not embed query: {type(e).__name__}: {e}"
+
+        # Format as a Postgres vector literal (512 floats).
+        vec_literal = "[" + ",".join(f"{v:.6f}" for v in vec) + "]"
+
+        where: list[str] = []
+        if since:
+            where.append(f"c.started >= {_lit(since)}::timestamptz")
+        if until:
+            where.append(f"c.started <  {_lit(until)}::timestamptz")
+        if host_email:
+            where.append(f"u.email = {_lit(host_email)}")
+        where_clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+        # Uses the HNSW index (idx_tc_embedding_hnsw, vector_cosine_ops).
+        # We call run_readonly directly — sqlglot does not understand the pgvector
+        # <=> operator and would reject this query. The SQL is internally generated;
+        # all user-supplied values are either transformed to a float vector (query
+        # text) or escaped via _lit() (since/until/host_email).
+        sql = f"""
+            SELECT c.id            AS call_id,
+                   c.title,
+                   c.started,
+                   u.email         AS host_email,
+                   c.company_name,
+                   round((1 - (tc.embedding <=> '{vec_literal}'::vector))::numeric, 4) AS similarity,
+                   tc.start_time   AS chunk_start_sec,
+                   left(tc.text, 400) AS snippet
+            FROM transcript_chunks tc
+            JOIN calls c  ON c.id = tc.call_id
+            LEFT JOIN users u ON u.id = c.primary_user_id
+            {where_clause}
+            ORDER BY tc.embedding <=> '{vec_literal}'::vector
+            LIMIT {capped}
+        """
+        try:
+            result = db().run_readonly(sql, max_rows=capped)
+        except Exception as e:
+            log.exception("semantic_search query failed")
+            return f"❌ Database error: {type(e).__name__}: {e}"
+        return format_result(result)
+
+    @mcp.tool(
+        description=(
             "Return the Postgres query plan for a SELECT statement. "
             "Useful for debugging slow queries."
         )
@@ -244,6 +319,45 @@ def build_server() -> FastMCP:
 # ---------------------------------------------------------------------- #
 # Internal helpers
 # ---------------------------------------------------------------------- #
+
+
+def _embed_query(text: str, project: str, region: str = "us-central1") -> list[float]:
+    """Embed *text* with Vertex AI text-embedding-005 (512 dims) via REST.
+
+    Uses gcloud ADC token — no extra Python deps beyond the standard library.
+    """
+    import subprocess
+    from shutil import which
+
+    gcloud = which("gcloud") or "gcloud"
+    out = subprocess.run(
+        [gcloud, "auth", "application-default", "print-access-token"],
+        capture_output=True, text=True, timeout=15,
+    )
+    if out.returncode != 0:
+        raise RuntimeError(
+            f"Could not get ADC token: {out.stderr.strip()}. "
+            "Run: gcloud auth application-default login"
+        )
+    token = out.stdout.strip()
+
+    url = (
+        f"https://{region}-aiplatform.googleapis.com/v1/projects/{project}"
+        f"/locations/{region}/publishers/google/models/text-embedding-005:predict"
+    )
+    payload = json.dumps({
+        "instances": [{"content": text, "task_type": "RETRIEVAL_QUERY"}],
+        "parameters": {"outputDimensionality": 512},
+    }).encode()
+
+    req = urllib.request.Request(url, data=payload, headers={
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        result = json.loads(resp.read())
+
+    return result["predictions"][0]["embeddings"]["values"]
 
 
 def _execute(db_: Db, sql: str, max_rows: int) -> str:
