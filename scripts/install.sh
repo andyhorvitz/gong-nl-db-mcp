@@ -31,7 +31,7 @@ PACKAGE="gong-nl-db-mcp"
 # Pin to Python 3.12. The package is tested on 3.12 in CI and cloud-sql-
 # python-connector has SSL behaviour differences on 3.13+ (and outright
 # breakage on 3.14) in uvx's isolated environment.
-PYTHON_VERSION="3.12"
+PYTHON_VERSION="3.13"
 SERVER_NAME="gong-nl-db"
 CLAUDE_CONFIG_DIR="${HOME}/Library/Application Support/Claude"
 CLAUDE_CONFIG="${CLAUDE_CONFIG_DIR}/claude_desktop_config.json"
@@ -175,7 +175,7 @@ entry = {
     # --python pins the interpreter; @latest selects the newest published release.
     # Pinning to 3.12 avoids SSL compatibility issues in Python 3.13/3.14's
     # isolated uvx environment on macOS (cloud-sql-python-connector / aiohttp).
-    "args": ["--python", python_version, f"{package}@latest"],
+    "args": ["--python", python_version, "--with", "mcp<2", f"{package}@latest"],
     "env": {
         "INSTANCE_CONNECTION_NAME": os.environ["INSTANCE_CONNECTION_NAME"],
         "DB_NAME": os.environ["DB_NAME"],

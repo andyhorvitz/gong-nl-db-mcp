@@ -25,7 +25,7 @@ $DB_NAME                  = if ($env:DB_NAME)                  { $env:DB_NAME } 
 $IP_TYPE                  = if ($env:IP_TYPE)                  { $env:IP_TYPE }                  else { "PUBLIC" }
 
 $PACKAGE        = "gong-nl-db-mcp"
-$PYTHON_VERSION = "3.12"
+$PYTHON_VERSION = "3.13"
 $SERVER_NAME    = "gong-nl-db"
 $CLAUDE_CONFIG_DIR = Join-Path $env:APPDATA "Claude"
 $CLAUDE_CONFIG     = Join-Path $CLAUDE_CONFIG_DIR "claude_desktop_config.json"
@@ -219,7 +219,7 @@ if (Test-Path $CLAUDE_CONFIG) {
 # Use the absolute path to uvx so Claude Desktop doesn't need it on its PATH.
 $entry = [ordered]@{
     command = $uvxExe
-    args    = @("--python", $PYTHON_VERSION, "${PACKAGE}@latest")
+    args    = @("--python", $PYTHON_VERSION, "--with", "mcp<2", "${PACKAGE}@latest")
     env     = [ordered]@{
         INSTANCE_CONNECTION_NAME = $INSTANCE_CONNECTION_NAME
         DB_NAME                  = $DB_NAME
