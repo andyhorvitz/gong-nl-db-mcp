@@ -7,13 +7,14 @@
 #   1. Confirms we're on Windows.
 #   2. Ensures `uv` is installed (installs via astral.sh if missing).
 #   3. Ensures `gcloud` is installed (auto-installs if missing) and ADC is set up.
-#   4. Clears any cached old version of the package.
-#   5. Writes an MCP server entry into Claude Desktop's config (pinned to
-#      Python 3.12 for SSL compatibility, using the full path to uvx).
-#   6. Runs a smoke test to confirm the package starts cleanly.
+#   4. Installs gong-nl-db-mcp as a persistent uv tool — a locked venv that
+#      does NOT re-resolve dependencies on every Claude Desktop restart.
+#   5. Writes an MCP server entry into Claude Desktop's config using the
+#      absolute path to the installed binary (no uvx, no @latest).
+#   6. Runs a smoke test to confirm the binary starts cleanly.
 #   7. Tells the colleague to restart Claude Desktop.
 #
-# Re-running is safe: the script is idempotent.
+# Re-running is safe: the script is idempotent and upgrades the tool in place.
 
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
@@ -25,10 +26,11 @@ $DB_NAME                  = if ($env:DB_NAME)                  { $env:DB_NAME } 
 $IP_TYPE                  = if ($env:IP_TYPE)                  { $env:IP_TYPE }                  else { "PUBLIC" }
 
 $PACKAGE         = "gong-nl-db-mcp"
-# Pin to a known-good release — update this when publishing a new version.
-$PACKAGE_VERSION = "0.1.7"
+# Pin to a known-good release. Re-run this installer (with an updated version
+# here) to upgrade. Users are never auto-upgraded on Claude Desktop restart.
+$PACKAGE_VERSION = "0.1.8"
 $PYTHON_VERSION  = "3.13"
-$SERVER_NAME    = "gong-nl-db"
+$SERVER_NAME     = "gong-nl-db"
 $CLAUDE_CONFIG_DIR = Join-Path $env:APPDATA "Claude"
 $CLAUDE_CONFIG     = Join-Path $CLAUDE_CONFIG_DIR "claude_desktop_config.json"
 
@@ -43,7 +45,6 @@ function Die  {
     exit 1
 }
 
-# Refresh PATH in the current session after an installer modifies it.
 function Refresh-Path {
     $machine = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
     $user    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
@@ -58,6 +59,12 @@ if (-not $IsWindows -and $env:OS -notmatch "Windows") {
 
 # ----- 2. uv --------------------------------------------------------------
 
+# uv installs tool binaries to %USERPROFILE%\.local\bin on Windows.
+$uvToolBin = Join-Path $env:USERPROFILE ".local\bin"
+if ($env:PATH -notmatch [regex]::Escape($uvToolBin)) {
+    $env:PATH = "$uvToolBin;$env:PATH"
+}
+
 $uvExe = $null
 try { $uvExe = (Get-Command uv -ErrorAction Stop).Source } catch {}
 
@@ -69,13 +76,12 @@ if (-not $uvExe) {
         Die "Failed to install uv: $_"
     }
     Refresh-Path
+    $env:PATH = "$uvToolBin;$env:PATH"
     try { $uvExe = (Get-Command uv -ErrorAction Stop).Source } catch {}
     if (-not $uvExe) {
-        # uv installs to %USERPROFILE%\.local\bin on Windows
         $candidate = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
         if (Test-Path $candidate) {
             $uvExe = $candidate
-            $env:PATH = "$env:PATH;$(Split-Path $candidate)"
         } else {
             Die "uv install appeared to succeed but 'uv' is not on PATH. Open a new PowerShell window and re-run."
         }
@@ -85,23 +91,12 @@ if (-not $uvExe) {
     Log "uv already installed ($uvVersion)."
 }
 
-# Derive uvx path from uv path (same directory).
-$uvxExe = Join-Path (Split-Path $uvExe) "uvx.exe"
-if (-not (Test-Path $uvxExe)) {
-    # Fallback: try PATH
-    try { $uvxExe = (Get-Command uvx -ErrorAction Stop).Source } catch {
-        Die "Could not locate uvx.exe alongside uv at '$uvExe'. Try opening a new PowerShell window and re-running."
-    }
-}
-Log "Using uvx at: $uvxExe"
-
 # ----- 3. gcloud + ADC ----------------------------------------------------
 
 $gcloudExe = $null
 try { $gcloudExe = (Get-Command gcloud -ErrorAction Stop).Source } catch {}
 
 if (-not $gcloudExe) {
-    # Check the default install location Google's installer uses.
     $candidate = Join-Path $env:LOCALAPPDATA "Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd"
     if (Test-Path $candidate) {
         $gcloudExe = $candidate
@@ -114,7 +109,6 @@ if (-not $gcloudExe) {
         try {
             Invoke-WebRequest -Uri "https://dl.google.com/dl/cloudsdk/channels/rapid/GoogleCloudSDKInstaller.exe" `
                               -OutFile $installer -UseBasicParsing
-            # /S = silent, /allusers not used so no admin required.
             Start-Process -FilePath $installer -ArgumentList "/S" -Wait
             Remove-Item $installer -Force -ErrorAction SilentlyContinue
         } catch {
@@ -134,7 +128,6 @@ if (-not $gcloudExe) {
     }
 }
 
-# Check ADC.
 $adcOk = $false
 try {
     $token = & $gcloudExe auth application-default print-access-token 2>&1
@@ -150,9 +143,6 @@ if (-not $adcOk) {
     Log "gcloud ADC already set up."
 }
 
-# Set the quota project so ADC requests are billed/attributed to the correct
-# GCP project. Without this, gcloud auth application-default set-quota-project
-# will fail with a serviceusage.services.use permissions error on first use.
 Log "Setting ADC quota project..."
 $project = $INSTANCE_CONNECTION_NAME.Split(":")[0]
 try {
@@ -167,20 +157,30 @@ try {
     Warn "Could not set quota project: $_"
 }
 
-# ----- 4. Clear cached package --------------------------------------------
+# ----- 4. Install as a persistent uv tool --------------------------------
+# `uv tool install` creates a locked venv that persists across Claude Desktop
+# restarts. It does NOT re-resolve dependencies on every launch — unlike uvx,
+# which re-resolves on every invocation and can silently pull breaking upstream
+# SDK releases overnight.
 
-Log "Clearing any cached version of ${PACKAGE}..."
-# Run with a timeout so a slow cache eviction never blocks the install.
-$cacheJob = Start-Job -ScriptBlock {
-    param($uvExe, $pkg)
-    & $uvExe cache clean $pkg 2>&1
-} -ArgumentList $uvExe, $PACKAGE
-$completed = Wait-Job $cacheJob -Timeout 10
-if (-not $completed) {
-    Stop-Job $cacheJob -ErrorAction SilentlyContinue
+Log "Installing ${PACKAGE}==${PACKAGE_VERSION} as a persistent uv tool..."
+try {
+    & $uvExe tool install --python $PYTHON_VERSION "${PACKAGE}==${PACKAGE_VERSION}" --force
+    if ($LASTEXITCODE -ne 0) { Die "uv tool install failed." }
+} catch {
+    Die "uv tool install failed: $_"
 }
-Remove-Job $cacheJob -Force -ErrorAction SilentlyContinue
-Ok "Cache cleared."
+Ok "Installed ${PACKAGE}==${PACKAGE_VERSION} on Python ${PYTHON_VERSION}."
+
+# The tool binary lands in %USERPROFILE%\.local\bin (already on PATH above).
+$binaryExe = Join-Path $uvToolBin "${PACKAGE}.exe"
+if (-not (Test-Path $binaryExe)) {
+    # Fallback: ask uv where the tool is
+    try { $binaryExe = (Get-Command $PACKAGE -ErrorAction Stop).Source } catch {
+        Die "Binary not found after install — expected at $binaryExe"
+    }
+}
+Log "Tool binary at: $binaryExe"
 
 # ----- 5. Write Claude Desktop config ------------------------------------
 
@@ -188,7 +188,6 @@ if (-not (Test-Path $CLAUDE_CONFIG_DIR)) {
     New-Item -ItemType Directory -Path $CLAUDE_CONFIG_DIR -Force | Out-Null
 }
 
-# Backup any existing config once.
 $backupPath = "$CLAUDE_CONFIG.bak"
 if ((Test-Path $CLAUDE_CONFIG) -and (-not (Test-Path $backupPath))) {
     Copy-Item $CLAUDE_CONFIG $backupPath
@@ -197,17 +196,14 @@ if ((Test-Path $CLAUDE_CONFIG) -and (-not (Test-Path $backupPath))) {
 
 Log "Registering MCP server '$SERVER_NAME' in Claude Desktop config..."
 
-# Read existing config or start fresh.
 $cfg = @{ mcpServers = @{} }
 if (Test-Path $CLAUDE_CONFIG) {
     try {
         $raw = Get-Content $CLAUDE_CONFIG -Raw -Encoding UTF8
         $parsed = $raw | ConvertFrom-Json
-        # ConvertFrom-Json returns a PSCustomObject; convert to hashtable for easy mutation.
         $cfg = @{}
         $parsed.PSObject.Properties | ForEach-Object { $cfg[$_.Name] = $_.Value }
         if (-not $cfg.ContainsKey("mcpServers")) { $cfg["mcpServers"] = @{} }
-        # Convert mcpServers PSCustomObject to hashtable too.
         $ms = @{}
         $cfg["mcpServers"].PSObject.Properties | ForEach-Object { $ms[$_.Name] = $_.Value }
         $cfg["mcpServers"] = $ms
@@ -217,11 +213,12 @@ if (Test-Path $CLAUDE_CONFIG) {
     }
 }
 
-# Build the new entry.
-# Use the absolute path to uvx so Claude Desktop doesn't need it on its PATH.
+# Absolute path to the uv-installed binary — no uvx wrapper, no args.
+# Claude Desktop has a restricted PATH that excludes %USERPROFILE%\.local\bin,
+# so the absolute path is required.
 $entry = [ordered]@{
-    command = $uvxExe
-    args    = @("--python", $PYTHON_VERSION, "--with", "mcp<2", "${PACKAGE}==${PACKAGE_VERSION}")
+    command = $binaryExe
+    args    = @()
     env     = [ordered]@{
         INSTANCE_CONNECTION_NAME = $INSTANCE_CONNECTION_NAME
         DB_NAME                  = $DB_NAME
@@ -230,9 +227,6 @@ $entry = [ordered]@{
 }
 
 $cfg["mcpServers"][$SERVER_NAME] = $entry
-
-# Serialize. Depth 10 ensures nested objects aren't truncated.
-# -Compress is NOT used so the file stays human-readable.
 $json = $cfg | ConvertTo-Json -Depth 10
 Set-Content -Path $CLAUDE_CONFIG -Value $json -Encoding UTF8
 Ok "Wrote $CLAUDE_CONFIG"
@@ -248,11 +242,11 @@ if ($INSTANCE_CONNECTION_NAME -match "REPLACE_ME" -or $DB_NAME -eq "REPLACE_ME")
 
 # ----- 7. Smoke test ------------------------------------------------------
 
-Log "Running smoke test (downloading package if needed, ~30 seconds first time)..."
+Log "Running smoke test..."
 try {
-    $smokeOutput = & $uvxExe --python $PYTHON_VERSION --with "mcp<2" "${PACKAGE}==${PACKAGE_VERSION}" --version 2>&1
+    $versionOut = & $binaryExe --version 2>&1
     if ($LASTEXITCODE -eq 0) {
-        Ok "Smoke test passed — package installed and starts cleanly on Python $PYTHON_VERSION."
+        Ok "Smoke test passed — $versionOut installed and starts cleanly."
     } else {
         Warn "Smoke test returned exit code $LASTEXITCODE."
         Warn "Check $env:APPDATA\Claude\logs\ after restarting Claude Desktop."

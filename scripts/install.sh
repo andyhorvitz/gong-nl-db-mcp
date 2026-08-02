@@ -7,31 +7,27 @@
 # What this does:
 #   1. Confirms we're on macOS.
 #   2. Ensures `uv` is installed (installs via astral.sh if missing).
-#   3. Ensures `gcloud` is installed (auto-installs via sdk.cloud.google.com
-#      if missing) and ADC is set up.
-#   4. Clears any cached old version of the package so the next run is fresh.
-#   5. Writes an MCP server entry into Claude Desktop's config (pinned to
-#      Python 3.12 for SSL compatibility).
-#   6. Runs a smoke test to confirm the package imports cleanly.
+#   3. Ensures `gcloud` is installed (auto-installs if missing) and ADC is set up.
+#   4. Installs gong-nl-db-mcp as a persistent uv tool — a locked venv that
+#      does NOT re-resolve dependencies on every Claude Desktop restart.
+#   5. Writes an MCP server entry into Claude Desktop's config using the
+#      absolute path to the installed binary (no uvx, no @latest).
+#   6. Runs a smoke test to confirm the binary starts cleanly.
 #   7. Tells the colleague to restart Claude Desktop.
 #
-# Re-running is safe: the script is idempotent.
+# Re-running is safe: the script is idempotent and upgrades the tool in place.
 
 set -euo pipefail
 
 # ----- Settings -----------------------------------------------------------
-# These three values must match the production Cloud SQL instance. Update
-# them here when the instance moves; installers will pick up the new values
-# on their next re-run.
 INSTANCE_CONNECTION_NAME="${INSTANCE_CONNECTION_NAME:-planar-ray-494004-b8:us-central1:gong-nl-db}"
 DB_NAME="${DB_NAME:-gong}"
 IP_TYPE="${IP_TYPE:-PUBLIC}"
 
 PACKAGE="gong-nl-db-mcp"
-# Pin to a known-good release. Using @latest caused a silent breakage when
-# the upstream mcp SDK published a breaking 2.0 release overnight. Update
-# this version when you publish a new release and re-run the installer.
-PACKAGE_VERSION="0.1.7"
+# Pin to a known-good release. Re-run this installer (with an updated version
+# here) to upgrade. Users are never auto-upgraded on Claude Desktop restart.
+PACKAGE_VERSION="0.1.8"
 PYTHON_VERSION="3.13"
 SERVER_NAME="gong-nl-db"
 CLAUDE_CONFIG_DIR="${HOME}/Library/Application Support/Claude"
@@ -50,11 +46,12 @@ die()  { printf "\033[1;31m✗\033[0m  %s\n" "$*" >&2; exit 1; }
 
 # ----- 2. uv --------------------------------------------------------------
 
+# ~/.local/bin is where uv installs its own binary and tool binaries.
+export PATH="${HOME}/.local/bin:${PATH}"
+
 if ! command -v uv >/dev/null 2>&1; then
     log "Installing uv (Python package/tool runner)…"
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    # The uv installer puts the binary in ~/.local/bin. Add it for this session.
-    export PATH="${HOME}/.local/bin:${PATH}"
     command -v uv >/dev/null 2>&1 || die "uv install appeared to succeed but 'uv' is not on PATH."
 else
     log "uv already installed ($(uv --version))."
@@ -63,18 +60,12 @@ fi
 # ----- 3. gcloud + ADC ----------------------------------------------------
 
 if ! command -v gcloud >/dev/null 2>&1; then
-    # Try the standard install location in case it's installed but not on PATH
-    # in the current shell (Google's installer adds it to ~/.bashrc/.zshrc but
-    # those aren't sourced by a non-interactive pipe-to-bash invocation).
     if [[ -x "${HOME}/google-cloud-sdk/bin/gcloud" ]]; then
         export PATH="${HOME}/google-cloud-sdk/bin:${PATH}"
         log "Found existing gcloud at ~/google-cloud-sdk (added to PATH for this session)."
     else
         log "gcloud not found — installing Google Cloud SDK to ~/google-cloud-sdk…"
         log "(This is the official Google installer. ~500MB, ~30 seconds.)"
-        # --disable-prompts: non-interactive (uses defaults, modifies shell rc).
-        # --install-dir: where to install (defaults to $HOME).
-        # Pipe an empty string to stdin so any residual prompt reads as EOF.
         curl -sSL https://sdk.cloud.google.com > /tmp/gcloud-install-$$.sh
         bash /tmp/gcloud-install-$$.sh --disable-prompts --install-dir="${HOME}" </dev/null
         rm -f /tmp/gcloud-install-$$.sh
@@ -92,97 +83,59 @@ else
     log "gcloud ADC already set up."
 fi
 
-# Set the quota project so ADC requests are billed/attributed to the correct
-# GCP project. Without this, gcloud auth application-default set-quota-project
-# will fail with a serviceusage.services.use permissions error on first use.
 log "Setting ADC quota project…"
 gcloud auth application-default set-quota-project "${INSTANCE_CONNECTION_NAME%%:*}" 2>/dev/null \
     && ok "Quota project set." \
-    || warn "Could not set quota project — you may need to run this manually after install: gcloud auth application-default set-quota-project planar-ray-494004-b8"
+    || warn "Could not set quota project — run manually: gcloud auth application-default set-quota-project planar-ray-494004-b8"
 
-# ----- 4. Resolve the full path to uvx -----------------------------------
-# Claude Desktop launches with a restricted PATH (/usr/local/bin,
-# /opt/homebrew/bin, /usr/bin, /bin, /usr/sbin, /sbin). If uv was installed
-# via the astral.sh script it lands in ~/.local/bin, which is NOT in that
-# list — causing "Failed to spawn process: No such file or directory" even
-# though uvx works fine in the terminal.
-# Fix: write the absolute path to uvx into the Claude Desktop config, and
-# ensure it's also symlinked into /usr/local/bin for good measure.
+# ----- 4. Install as a persistent uv tool --------------------------------
+# `uv tool install` creates a locked venv that persists across Claude Desktop
+# restarts. It does NOT re-resolve dependencies on every launch — unlike uvx,
+# which re-resolves on every invocation and can silently pull breaking upstream
+# SDK releases overnight.
+#
+# `--force` reinstalls even if the same version is already present, ensuring
+# a clean venv on re-runs (e.g. after a broken partial install).
 
-UVX_PATH="$(command -v uvx)"
-[[ -n "${UVX_PATH}" ]] || die "uvx not found on PATH — this should not happen after the install step above."
+log "Installing ${PACKAGE}==${PACKAGE_VERSION} as a persistent uv tool…"
+uv tool install --python "${PYTHON_VERSION}" "${PACKAGE}==${PACKAGE_VERSION}" --force \
+    || die "uv tool install failed — see above for details."
+ok "Installed ${PACKAGE}==${PACKAGE_VERSION} on Python ${PYTHON_VERSION}."
 
-# Symlink into /usr/local/bin if it isn't already reachable there.
-if [[ ! -x "/usr/local/bin/uvx" ]]; then
-    log "Symlinking uvx → /usr/local/bin/uvx so Claude Desktop can find it…"
-    sudo ln -sf "${UVX_PATH}" /usr/local/bin/uvx \
-        && ok "Symlinked ${UVX_PATH} → /usr/local/bin/uvx" \
-        || warn "Could not create symlink (sudo failed). Will use full path in config instead."
-fi
-
-# Always use the absolute path in the config regardless — belt and suspenders.
-log "Using uvx at: ${UVX_PATH}"
-
-# ----- 6. Clear cached package (ensures the latest version is used) -------
-
-log "Clearing any cached version of ${PACKAGE}…"
-# Run with a timeout so a slow cache eviction never blocks the install.
-# Errors are non-fatal — worst case the user runs the old cached version
-# once and uvx auto-updates on the next Claude Desktop restart.
-uv cache clean "${PACKAGE}" 2>/dev/null &
-UV_CACHE_PID=$!
-# Give it 10 seconds; kill if still running.
-for i in $(seq 1 10); do
-    kill -0 "${UV_CACHE_PID}" 2>/dev/null || break
-    sleep 1
-done
-kill "${UV_CACHE_PID}" 2>/dev/null || true
-wait "${UV_CACHE_PID}" 2>/dev/null || true
-ok "Cache cleared."
+# The tool binary lands in ~/.local/bin (already on PATH above).
+BINARY_PATH="$(command -v "${PACKAGE}")" \
+    || die "Binary not found after install — expected at ${HOME}/.local/bin/${PACKAGE}"
+log "Tool binary at: ${BINARY_PATH}"
 
 # ----- 5. Write Claude Desktop config ------------------------------------
 
 mkdir -p "${CLAUDE_CONFIG_DIR}"
 
-# Backup any existing config once.
 if [[ -f "${CLAUDE_CONFIG}" && ! -f "${CLAUDE_CONFIG}.bak" ]]; then
     cp "${CLAUDE_CONFIG}" "${CLAUDE_CONFIG}.bak"
     log "Backed up existing config to $(basename "${CLAUDE_CONFIG}").bak"
 fi
 
-# Merge or create using Python (always available on macOS).
-# Explicitly export the shell vars into Python's environment — shell-local
-# variables are not inherited into child processes by default.
 log "Registering MCP server '${SERVER_NAME}' in Claude Desktop config…"
 CLAUDE_CONFIG="${CLAUDE_CONFIG}" \
 SERVER_NAME="${SERVER_NAME}" \
-PACKAGE="${PACKAGE}" \
-PACKAGE_VERSION="${PACKAGE_VERSION}" \
-PYTHON_VERSION="${PYTHON_VERSION}" \
-UVX_PATH="${UVX_PATH}" \
+BINARY_PATH="${BINARY_PATH}" \
 INSTANCE_CONNECTION_NAME="${INSTANCE_CONNECTION_NAME}" \
 DB_NAME="${DB_NAME}" \
 IP_TYPE="${IP_TYPE}" \
 python3 - <<'PY'
 import json, os
-path = os.environ["CLAUDE_CONFIG"]
-server_name = os.environ["SERVER_NAME"]
-package = os.environ["PACKAGE"]
-package_version = os.environ["PACKAGE_VERSION"]
-python_version = os.environ["PYTHON_VERSION"]
-uvx_path = os.environ["UVX_PATH"]
+path    = os.environ["CLAUDE_CONFIG"]
 entry = {
-    # Use the absolute path to uvx. Claude Desktop launches with a stripped
-    # PATH that typically excludes ~/.local/bin where uv installs its tools.
-    "command": uvx_path,
-    # --python pins the interpreter; @latest selects the newest published release.
-    # Pinning to 3.12 avoids SSL compatibility issues in Python 3.13/3.14's
-    # isolated uvx environment on macOS (cloud-sql-python-connector / aiohttp).
-    "args": ["--python", python_version, "--with", "mcp<2", f"{package}=={package_version}"],
+    # Absolute path to the uv-installed binary — no uvx wrapper, no args.
+    # Claude Desktop has a restricted PATH that excludes ~/.local/bin, so
+    # the absolute path is required.
+    "command": os.environ["BINARY_PATH"],
+    "args": [],
     "env": {
         "INSTANCE_CONNECTION_NAME": os.environ["INSTANCE_CONNECTION_NAME"],
-        "DB_NAME": os.environ["DB_NAME"],
-        "IP_TYPE": os.environ["IP_TYPE"],
+        "DB_NAME":                  os.environ["DB_NAME"],
+        "IP_TYPE":                  os.environ["IP_TYPE"],
     },
 }
 try:
@@ -190,14 +143,14 @@ try:
         cfg = json.load(f)
 except (FileNotFoundError, json.JSONDecodeError):
     cfg = {}
-cfg.setdefault("mcpServers", {})[server_name] = entry
+cfg.setdefault("mcpServers", {})[os.environ["SERVER_NAME"]] = entry
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2)
     f.write("\n")
 print(f"Wrote {path}")
 PY
 
-# ----- 7. Verify placeholders -------------------------------------------
+# ----- 6. Verify placeholders -------------------------------------------
 
 if [[ "${INSTANCE_CONNECTION_NAME}" == *REPLACE_ME* || "${DB_NAME}" == "REPLACE_ME" ]]; then
     warn "This installer still has REPLACE_ME placeholders for GCP settings."
@@ -206,16 +159,15 @@ if [[ "${INSTANCE_CONNECTION_NAME}" == *REPLACE_ME* || "${DB_NAME}" == "REPLACE_
     exit 0
 fi
 
-# ----- 8. Smoke test — confirm the package imports cleanly ---------------
+# ----- 7. Smoke test — confirm the binary starts cleanly -----------------
 
-log "Running smoke test (downloading package if needed, ~10 seconds first time)…"
-if "${UVX_PATH}" --python "${PYTHON_VERSION}" --with "mcp<2" "${PACKAGE}==${PACKAGE_VERSION}" --version >/dev/null 2>&1; then
-    ok "Smoke test passed — package installed and starts cleanly on Python ${PYTHON_VERSION}."
+log "Running smoke test…"
+if "${BINARY_PATH}" --version >/dev/null 2>&1; then
+    VERSION_OUT="$("${BINARY_PATH}" --version 2>/dev/null)"
+    ok "Smoke test passed — ${VERSION_OUT} installed and starts cleanly."
 else
-    # Non-fatal: the server may still work; Claude Desktop's stderr logs will
-    # have the real error. Warn rather than die so the config is still written.
     warn "Smoke test failed. Check ~/Library/Logs/Claude/ after restarting Claude Desktop."
-    warn "Common fix: run  uv cache clean ${PACKAGE}  then re-run this installer."
+    warn "Common fix: re-run this installer."
 fi
 
 log "Done. Restart Claude Desktop to pick up the new MCP server."
