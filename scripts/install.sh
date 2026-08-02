@@ -28,9 +28,10 @@ DB_NAME="${DB_NAME:-gong}"
 IP_TYPE="${IP_TYPE:-PUBLIC}"
 
 PACKAGE="gong-nl-db-mcp"
-# Pin to Python 3.12. The package is tested on 3.12 in CI and cloud-sql-
-# python-connector has SSL behaviour differences on 3.13+ (and outright
-# breakage on 3.14) in uvx's isolated environment.
+# Pin to a known-good release. Using @latest caused a silent breakage when
+# the upstream mcp SDK published a breaking 2.0 release overnight. Update
+# this version when you publish a new release and re-run the installer.
+PACKAGE_VERSION="0.1.7"
 PYTHON_VERSION="3.13"
 SERVER_NAME="gong-nl-db"
 CLAUDE_CONFIG_DIR="${HOME}/Library/Application Support/Claude"
@@ -156,6 +157,7 @@ log "Registering MCP server '${SERVER_NAME}' in Claude Desktop config…"
 CLAUDE_CONFIG="${CLAUDE_CONFIG}" \
 SERVER_NAME="${SERVER_NAME}" \
 PACKAGE="${PACKAGE}" \
+PACKAGE_VERSION="${PACKAGE_VERSION}" \
 PYTHON_VERSION="${PYTHON_VERSION}" \
 UVX_PATH="${UVX_PATH}" \
 INSTANCE_CONNECTION_NAME="${INSTANCE_CONNECTION_NAME}" \
@@ -166,6 +168,7 @@ import json, os
 path = os.environ["CLAUDE_CONFIG"]
 server_name = os.environ["SERVER_NAME"]
 package = os.environ["PACKAGE"]
+package_version = os.environ["PACKAGE_VERSION"]
 python_version = os.environ["PYTHON_VERSION"]
 uvx_path = os.environ["UVX_PATH"]
 entry = {
@@ -175,7 +178,7 @@ entry = {
     # --python pins the interpreter; @latest selects the newest published release.
     # Pinning to 3.12 avoids SSL compatibility issues in Python 3.13/3.14's
     # isolated uvx environment on macOS (cloud-sql-python-connector / aiohttp).
-    "args": ["--python", python_version, "--with", "mcp<2", f"{package}@latest"],
+    "args": ["--python", python_version, "--with", "mcp<2", f"{package}=={package_version}"],
     "env": {
         "INSTANCE_CONNECTION_NAME": os.environ["INSTANCE_CONNECTION_NAME"],
         "DB_NAME": os.environ["DB_NAME"],
@@ -206,7 +209,7 @@ fi
 # ----- 8. Smoke test — confirm the package imports cleanly ---------------
 
 log "Running smoke test (downloading package if needed, ~10 seconds first time)…"
-if "${UVX_PATH}" --python "${PYTHON_VERSION}" "${PACKAGE}@latest" --help >/dev/null 2>&1; then
+if "${UVX_PATH}" --python "${PYTHON_VERSION}" --with "mcp<2" "${PACKAGE}==${PACKAGE_VERSION}" --version >/dev/null 2>&1; then
     ok "Smoke test passed — package installed and starts cleanly on Python ${PYTHON_VERSION}."
 else
     # Non-fatal: the server may still work; Claude Desktop's stderr logs will

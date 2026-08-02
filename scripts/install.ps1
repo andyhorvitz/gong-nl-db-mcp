@@ -24,8 +24,10 @@ $INSTANCE_CONNECTION_NAME = if ($env:INSTANCE_CONNECTION_NAME) { $env:INSTANCE_C
 $DB_NAME                  = if ($env:DB_NAME)                  { $env:DB_NAME }                  else { "gong" }
 $IP_TYPE                  = if ($env:IP_TYPE)                  { $env:IP_TYPE }                  else { "PUBLIC" }
 
-$PACKAGE        = "gong-nl-db-mcp"
-$PYTHON_VERSION = "3.13"
+$PACKAGE         = "gong-nl-db-mcp"
+# Pin to a known-good release — update this when publishing a new version.
+$PACKAGE_VERSION = "0.1.7"
+$PYTHON_VERSION  = "3.13"
 $SERVER_NAME    = "gong-nl-db"
 $CLAUDE_CONFIG_DIR = Join-Path $env:APPDATA "Claude"
 $CLAUDE_CONFIG     = Join-Path $CLAUDE_CONFIG_DIR "claude_desktop_config.json"
@@ -219,7 +221,7 @@ if (Test-Path $CLAUDE_CONFIG) {
 # Use the absolute path to uvx so Claude Desktop doesn't need it on its PATH.
 $entry = [ordered]@{
     command = $uvxExe
-    args    = @("--python", $PYTHON_VERSION, "--with", "mcp<2", "${PACKAGE}@latest")
+    args    = @("--python", $PYTHON_VERSION, "--with", "mcp<2", "${PACKAGE}==${PACKAGE_VERSION}")
     env     = [ordered]@{
         INSTANCE_CONNECTION_NAME = $INSTANCE_CONNECTION_NAME
         DB_NAME                  = $DB_NAME
@@ -248,7 +250,7 @@ if ($INSTANCE_CONNECTION_NAME -match "REPLACE_ME" -or $DB_NAME -eq "REPLACE_ME")
 
 Log "Running smoke test (downloading package if needed, ~30 seconds first time)..."
 try {
-    $smokeOutput = & $uvxExe --python $PYTHON_VERSION "${PACKAGE}@latest" --help 2>&1
+    $smokeOutput = & $uvxExe --python $PYTHON_VERSION --with "mcp<2" "${PACKAGE}==${PACKAGE_VERSION}" --version 2>&1
     if ($LASTEXITCODE -eq 0) {
         Ok "Smoke test passed — package installed and starts cleanly on Python $PYTHON_VERSION."
     } else {

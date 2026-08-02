@@ -14,7 +14,18 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ImportError as _e:
+    _hint = (
+        "\n\ngong-nl-db-mcp could not import FastMCP from the mcp package.\n"
+        "This usually means the mcp SDK was upgraded past a breaking version.\n\n"
+        "Fix (run in Terminal, then restart Claude Desktop):\n"
+        "  uv cache clean gong-nl-db-mcp\n"
+        "  curl -LsSf https://raw.githubusercontent.com/andyhorvitz/gong-nl-db-mcp/main/scripts/install.sh | bash\n\n"
+        "Or contact andy.horvitz@bairesdev.com."
+    )
+    raise ImportError(str(_e) + _hint) from _e
 
 from .db import Db, DbConfig, QueryResult
 from .formatting import format_result
@@ -422,6 +433,11 @@ def _patch_ssl_with_certifi() -> None:
 
 
 def main() -> None:
+    if "--version" in sys.argv:
+        from importlib.metadata import version
+        print(version("gong-nl-db-mcp"))
+        return
+
     # Must run before any network I/O — cloud-sql-python-connector's aiohttp
     # calls sqladmin.googleapis.com at connector init time, and the isolated
     # uvx Python environment does not reliably find the system CA bundle on
@@ -433,6 +449,14 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,  # stdout is the MCP transport — keep it clean
     )
+
+    from importlib.metadata import version as _v, PackageNotFoundError
+    try:
+        _ver = _v("gong-nl-db-mcp")
+    except PackageNotFoundError:
+        _ver = "unknown"
+    log.info("gong-nl-db-mcp %s starting (Python %s)", _ver, sys.version.split()[0])
+
     build_server().run()
 
 
